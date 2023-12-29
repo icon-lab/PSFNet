@@ -2,7 +2,7 @@
 
 The technique (PSFNet) is described in the [following](https://www.sciencedirect.com/science/article/pii/S0010482523010752) paper:
 
-Dar SUH, Öztürk Ş, Özbey M, Oguz KK, Çukur T. Parallel-stream fusion of scan-specific and scan-general priors for learning deep MRI reconstruction in low-data regimes. 2023.
+Dar SUH, Öztürk Ş, Özbey M, Oguz KK, Çukur T. Parallel-stream fusion of scan-specific and scan-general priors for learning deep MRI reconstruction in low-data regimes. 2023. <br />
 ![PSFNet](PSFNet.jpg)
 
 ## Demo
@@ -30,7 +30,7 @@ results_dir - results directory
 
 ### Dependencies
 The code has been tested in the following settings:<br />
-Ubuntu [18.04] 
+Ubuntu [18.04] <br />
 Python [3.6.9]  <br />
 CUDA [11.2]  <br />
 Tensorflow [2.6.2] <br />
