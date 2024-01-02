@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 
-@TODO
+
 * 
-* This code trains spirit based nn model on multi-coil T1/T2 weighted images. 
-n_spirit_itr is number of calibration consistency operations before each cascade
-domain is the contrast
+* This code trains and test PSFNet
 """
     
 # imports
@@ -52,14 +50,15 @@ joint_optimization = args.joint_optimization
 
 data_loader = data_load
 
-#load data
+#load training data
 dataset=data_dir + 'images_train.mat'
 dataset_kernel=data_dir + 'kernel_train.mat'
 (images_us, images_fs, masks, coil_maps,int_kernel,samples)=data_loader(dataset,dataset_kernel,batch_size=batch_size,subs=subs,slices=slices)
+#load validation data
 dataset=data_dir + 'images_val.mat'
 dataset_kernel=data_dir + 'kernel_val.mat'
 (images_us_val, images_fs_val, masks_val, coil_maps_val,int_kernel_val,samples)=data_loader(dataset,dataset_kernel,batch_size=batch_size_val,subs=10,slices=10,shuffle=0)   
-
+#Get shapes of images
 batch_size, coil_n,  patch_size_x, patch_size_y = images_us[0].shape
 kernel_size_train = int_kernel[0].shape[-1];kernel_train_x = int(np.floor(kernel_size_train/2));kernel_train_y = int(np.ceil(kernel_size_train/2))
 kernel_size_val = int_kernel_val[0].shape[-1];kernel_val_x = int(np.floor(kernel_size_train/2));kernel_val_y = int(np.ceil(kernel_size_train/2))
@@ -68,21 +67,21 @@ tf.compat.v1.disable_eager_execution()
 gpu_options = tf.compat.v1.GPUOptions(allow_growth=True)
 graph=tf.compat.v1.reset_default_graph()  
 
-#############33
+#Set place holders
 patch_size=None
 patch_size=None
 x = tf.compat.v1.placeholder(tf.complex64, shape=[None,coil_n, patch_size,patch_size], name="x") # undersampled  
 y = tf.compat.v1.placeholder(tf.complex64, shape=[None, patch_size,patch_size], name="y") # groundtruth   
 us_masks=tf.compat.v1.placeholder(tf.bool, shape=[None,patch_size,patch_size], name="us_masks") #masks
 coil_sens_maps=tf.compat.v1.placeholder(tf.complex64, shape=[None, coil_n,patch_size,patch_size], name="coil_sens_maps") #coil sensitivity maps
-kernel=tf.compat.v1.placeholder(tf.complex64, shape=[None, coil_n,coil_n,patch_size,patch_size], name="kernel")
-l_r=tf.compat.v1.placeholder(tf.float32, shape=[], name="l_r")
+kernel=tf.compat.v1.placeholder(tf.complex64, shape=[None, coil_n,coil_n,patch_size,patch_size], name="kernel")#interpolation kernel
+l_r=tf.compat.v1.placeholder(tf.float32, shape=[], name="l_r")#learning rate
 sess = tf.compat.v1.InteractiveSession(config=tf.compat.v1.ConfigProto(gpu_options=gpu_options))
-
+#define network
 dnn=network( x=x,y=y,us_masks=us_masks,coil_sens_maps=coil_sens_maps,kernel=kernel,l_r=l_r,cascades=cascades, n_spirit_itr=n_spirit_itr, coil_n=coil_n,recursive=recursive)    
 sess.run(tf.compat.v1.global_variables_initializer())
 model_saver = tf.compat.v1.train.Saver()
-#20
+#define validation variables for monitoring the training
 validation_samples = batch_size_val * len(images_us_val)
 val_error_mse_pre,val_error_mae_pre,val_error_mse,val_error_mae,val_image_dc,val_image_spirit=np.zeros([Epochs,
                                                                                                         len(images_us_val)]),np.zeros([Epochs,
@@ -105,6 +104,7 @@ for cas in range(total_cascades,total_cascades+1):
         for j in range(len(images_us)):  
             start=time.time() 
             batch_x,batch_y,batch_coil_maps,batch_mask,batch_kernel = images_us[j],images_fs[j],coil_maps[j],masks[j],int_kernel[j]
+            #In the tensofrlow part ifft and fftshift are not implemented, tehrefore the masks is ifftshifted for Data consistency
             batch_mask=np.fft.ifftshift(batch_mask,axes=(1,2))
             batch_kernel=np.pad(batch_kernel,((0,0),(0,0),(0,0),(int(patch_size_x/2-kernel_train_x),int(patch_size_x/2-kernel_train_y)),(int(patch_size_y/2-kernel_train_x),int(patch_size_y/2-kernel_train_y))),mode='constant')
             for kk in range(batch_kernel.shape[0]):                  
@@ -112,7 +112,7 @@ for cas in range(total_cascades,total_cascades+1):
             if joint_optimization:
                 sess.run(dnn.optimize_joint(),feed_dict={ x: batch_x, y: batch_y,coil_sens_maps: batch_coil_maps, us_masks:batch_mask, kernel:batch_kernel, l_r:learning_rate})
                 total_time_train[i,j]=time.time()-start
-
+        #validation batch loop
         for j in val_range:
             batch_x,batch_y,batch_coil_maps,batch_mask,batch_kernel = images_us_val[j],images_fs_val[j],coil_maps_val[j],masks_val[j],int_kernel_val[j] 
             batch_kernel=np.pad(batch_kernel,((0,0),(0,0),(0,0),(int(patch_size_x/2-kernel_val_x),int(patch_size_x/2-kernel_val_y)),(int(patch_size_y/2-kernel_val_x),int(patch_size_y/2-kernel_val_y))),mode='constant')
@@ -123,14 +123,14 @@ for cas in range(total_cascades,total_cascades+1):
             
             val_error_mse_pre[i,j],val_error_mae_pre[i,j],val_error_mse[i,j],val_error_mae[i,j]=sess.run(dnn.losses(cascade_n=np.min((cas,cascades))-1),feed_dict={x: batch_x, y: batch_y,coil_sens_maps: batch_coil_maps, us_masks:batch_mask, kernel:batch_kernel})
             val_image_dc[j,:,:],val_image_spirit[j,:,:]=sess.run(dnn.predictions(cascade_n=np.min((cas,cascades))-1),feed_dict={x: np.expand_dims(batch_x[1,:,:,:],0),coil_sens_maps: np.expand_dims(batch_coil_maps[1,:,:,:],0), us_masks:np.expand_dims(batch_mask[1,:,:],0), kernel:np.expand_dims(batch_kernel[1,:,:,:,:],0)})
-                   
+        #save the best model           
         if i>1:
             if ((val_error_mse[i,:].mean()+val_error_mae[i,:].mean())<np.min(val_error_mse[0:i,:].mean(axis=1)+val_error_mae[0:i,:].mean(axis=1))): 
                 model_saver.save(sess, ckpt_dir + '/model_best.ckpt')               
 
-
-        print ('cascade ' + str(cas) +',Epoch ' + str(i) +',validation error pre (MSE) = {}'.format(val_error_mse_pre[i,:].mean()))
-        print ('cascade ' + str(cas) +',Epoch ' + str(i) +',validation error pre (MAE) = {}'.format(val_error_mae_pre[i,:].mean()))                
+        #print Errors
+        print ('cascade ' + str(cas) +',Epoch ' + str(i) +',validation error pre DC (MSE) = {}'.format(val_error_mse_pre[i,:].mean()))
+        print ('cascade ' + str(cas) +',Epoch ' + str(i) +',validation error pre DC (MAE) = {}'.format(val_error_mae_pre[i,:].mean()))                
         print ('cascade ' + str(cas) +',Epoch ' + str(i) +',validation error (MSE) = {}'.format(val_error_mse[i,:].mean()))
         print ('cascade ' + str(cas) +',Epoch ' + str(i) +',validation error (MAE) = {}'.format(val_error_mae[i,:].mean())) 
     f = h5py.File(ckpt_dir + 'val_loss.mat',  "w")
